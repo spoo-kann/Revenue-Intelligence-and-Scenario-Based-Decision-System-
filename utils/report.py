@@ -186,5 +186,10 @@ def generate_report_pdf(
                 pdf.cell(cw[i], 7, c, border=1, ln=False, align="C")
             pdf.ln()
 
-    return bytes(pdf.output(dest='S'))
+    output = pdf.output(dest='S')
+
+    if isinstance(output, str):
+        output = output.encode('latin-1')
+
+    return output
     
