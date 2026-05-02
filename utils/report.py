@@ -71,7 +71,145 @@ def generate_report_pdf(
     models: list | None,
     forecast_df: pd.DataFrame | None,
     feature_importance: pd.DataFrame | None,
+    target_result: dict | None = None,
 ) -> bytes:
+    pdf = FPDF(orientation='P', unit='mm', format='A4')
+    pdf.set_margins(left=20, top=20, right=20)
+    pdf.set_auto_page_break(auto=True, margin=20)
+    pdf.add_page()
+
+    W = pdf.w - pdf.l_margin - pdf.r_margin
+
+    def section_title(text: str):
+        pdf.ln(4)
+        pdf.set_font("Arial", "B", 13)
+        pdf.set_fill_color(240, 242, 255)
+        pdf.cell(W, 8, text, ln=True, fill=True)
+        pdf.ln(2)
+
+    def row_line(label: str, value: str, bold_label: bool = False):
+        pdf.set_font("Arial", "B" if bold_label else "", 10)
+        pdf.cell(70, 7, label, ln=False)
+        pdf.set_font("Arial", "", 10)
+        pdf.cell(W - 70, 7, value, ln=True)
+
+    # ── Title ─────────────────────────────────────────────────────────────────
+    pdf.set_font("Arial", "B", 18)
+    pdf.cell(W, 12, "Revenue Intelligence Report", ln=True, align="C")
+    pdf.set_font("Arial", "", 9)
+    pdf.set_text_color(120, 120, 120)
+    pdf.cell(W, 6, f"Generated: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')}", ln=True, align="C")
+    pdf.set_text_color(0, 0, 0)
+    pdf.ln(4)
+
+    # ── Summary Statistics ────────────────────────────────────────────────────
+    section_title("Summary Statistics")
+    for label, value in [
+        ("Total Periods",   str(len(cleaned_df))),
+        ("Total Revenue",   f"${cleaned_df['Revenue'].sum():,.2f}"),
+        ("Average Revenue", f"${cleaned_df['Revenue'].mean():,.2f}"),
+        ("Max Revenue",     f"${cleaned_df['Revenue'].max():,.2f}"),
+        ("Min Revenue",     f"${cleaned_df['Revenue'].min():,.2f}"),
+        ("Std Deviation",   f"${cleaned_df['Revenue'].std():,.2f}"),
+        ("Start Date",      str(cleaned_df['Date'].min().date())),
+        ("End Date",        str(cleaned_df['Date'].max().date())),
+    ]:
+        row_line(label, value)
+
+    # ── Target Feasibility ────────────────────────────────────────────────────
+    if target_result:
+        section_title("Target Feasibility Result")
+        tr = target_result
+
+        # Strip ALL HTML tags and emojis — fpdf only supports latin characters
+        import re
+        def _clean(text: str) -> str:
+            text = re.sub(r'<[^>]+>', '', str(text))          # remove HTML tags
+            text = re.sub(r'[^\x00-\x7F]+', '', text)         # remove non-ASCII (emojis etc.)
+            return text.strip()
+
+        clean_label = _clean(tr["label"])
+        clean_note  = _clean(tr["note"])
+        clean_rec   = _clean(tr["recommendation"])
+
+        # Verdict label as bold heading
+        pdf.set_font("Arial", "B", 12)
+        pdf.cell(W, 8, clean_label, ln=True)
+        pdf.set_font("Arial", "", 10)
+        pdf.ln(2)
+
+        for label, value in [
+            ("Target Revenue",    f"${tr['target']:,.0f}"),
+            ("ML Forecast",       f"${tr['forecast']:,.0f}"),
+            ("Forecast Upper CI", f"${tr['upper']:,.0f}"),
+            ("Forecast Lower CI", f"${tr['lower']:,.0f}"),
+            ("Growth Required",   f"{tr['req_growth']:+.1f}%"),
+            ("Check Period",      _clean(tr["period"])),
+        ]:
+            row_line(label, value)
+
+        pdf.ln(2)
+        pdf.set_font("Arial", "I", 10)
+        pdf.multi_cell(W, 6, clean_note)
+        pdf.ln(2)
+        pdf.set_font("Arial", "B", 10)
+        pdf.cell(45, 7, "Recommendation:", ln=False)
+        pdf.set_font("Arial", "", 10)
+        pdf.multi_cell(W - 45, 7, clean_rec)
+
+    # ── Model Evaluation ──────────────────────────────────────────────────────
+    if models:
+        section_title("Model Evaluation")
+        best = min(models, key=lambda m: m['rmse'])
+        pdf.set_font("Arial", "B", 9)
+        col_w = [60, 30, 30, 25, 30]
+        for h, w in zip(["Model", "RMSE ($)", "MAE ($)", "R²", "CV RMSE"], col_w):
+            pdf.cell(w, 7, h, border=1, ln=False, align="C")
+        pdf.ln()
+        pdf.set_font("Arial", "", 9)
+        for m in models:
+            is_best = m['name'] == best['name']
+            if is_best:
+                pdf.set_fill_color(235, 255, 240)
+            cv = f"${m.get('cv_rmse_mean', m['rmse']):,.0f}"
+            for val, w in zip([m['name'], f"${m['rmse']:,.0f}", f"${m['mae']:,.0f}",
+                                f"{m['r2']:.4f}", cv], col_w):
+                pdf.cell(w, 7, val, border=1, ln=False, align="C", fill=is_best)
+            pdf.ln()
+            if is_best:
+                pdf.set_fill_color(255, 255, 255)
+
+    # ── Feature Importance ────────────────────────────────────────────────────
+    if feature_importance is not None:
+        section_title("Top Revenue Drivers (SHAP)")
+        pdf.set_font("Arial", "B", 9)
+        pdf.cell(100, 7, "Feature", border=1, ln=False)
+        pdf.cell(W - 100, 7, "Importance (%)", border=1, ln=True, align="C")
+        pdf.set_font("Arial", "", 9)
+        for _, fi_row in feature_importance.head(8).iterrows():
+            pdf.cell(100, 7, str(fi_row['Feature']), border=1, ln=False)
+            pdf.cell(W - 100, 7, f"{fi_row['Importance']:.1f}%", border=1, ln=True, align="C")
+
+    # ── Forecast Data ─────────────────────────────────────────────────────────
+    if forecast_df is not None:
+        section_title("Forecast Data")
+        pdf.set_font("Arial", "B", 9)
+        cw = [W / 4] * 4
+        for h in ["Date", "Forecast ($)", "Lower CI ($)", "Upper CI ($)"]:
+            pdf.cell(cw[0], 7, h, border=1, ln=False, align="C")
+        pdf.ln()
+        pdf.set_font("Arial", "", 9)
+        for _, frow in forecast_df.iterrows():
+            for val, w in zip([
+                frow['Date'].strftime('%Y-%m-%d'),
+                f"${frow['Forecast']:,.0f}",
+                f"${frow['Lower']:,.0f}",
+                f"${frow['Upper']:,.0f}",
+            ], cw):
+                pdf.cell(w, 7, val, border=1, ln=False, align="C")
+            pdf.ln()
+
+    return bytes(pdf.output(dest='S'))
     pdf = FPDF(orientation='P', unit='mm', format='A4')
     # Explicit margins: left=20, top=20, right=20  →  usable width = 210-40 = 170mm
     pdf.set_margins(left=20, top=20, right=20)
@@ -186,10 +324,4 @@ def generate_report_pdf(
                 pdf.cell(cw[i], 7, c, border=1, ln=False, align="C")
             pdf.ln()
 
-    output = pdf.output(dest='S')
-
-    if isinstance(output, str):
-        output = output.encode('latin-1')
-
-    return output
-    
+    return bytes(pdf.output(dest='S'))
