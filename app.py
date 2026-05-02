@@ -338,7 +338,8 @@ def _model_card_html(m, is_best):
 
 # ── Session state ─────────────────────────────────────────────────────────────
 for k in ['raw_df','cleaned_df','featured_df','models','best_model',
-          'forecast_df','feature_importance','validation_log','saved_scenarios']:
+          'forecast_df','feature_importance','validation_log','saved_scenarios',
+          'target_result']:
     if k not in st.session_state:
         st.session_state[k] = None
 
@@ -525,16 +526,8 @@ div[data-testid="stSidebar"] div[data-testid="column"]:last-child .stButton > bu
         # Compute score
         raw_rows     = len(raw) if raw is not None else len(cl)
         clean_rows   = len(cl)
-        null_rev     = cl['Revenue'].isna().sum()
-        null_units   = cl['Units_Sold'].isna().sum()
-        warnings_log = sum(1 for e in st.session_state.validation_log if e['type'] == 'warning')
-        errors_log   = sum(1 for e in st.session_state.validation_log if e['type'] == 'error')
-
-        completeness  = min(100, (clean_rows / max(raw_rows, 1)) * 100)
-        null_penalty  = (null_rev + null_units) * 5
-        warn_penalty  = warnings_log * 4
-        err_penalty   = errors_log * 15
-        score = max(0, min(100, round(completeness - null_penalty - warn_penalty - err_penalty)))
+        completeness = min(100, (clean_rows / max(raw_rows, 1)) * 100)
+        score        = max(0, min(100, round(completeness)))
 
         if score >= 85:
             h_color, h_label, h_bg = '#10b981', 'Excellent', 'rgba(16,185,129,0.1)'
@@ -555,16 +548,12 @@ div[data-testid="stSidebar"] div[data-testid="column"]:last-child .stButton > bu
   </div>
   <div style='height:5px;background:var(--border);border-radius:999px;overflow:hidden;'>
     <div style='height:100%;width:{bar_pct}%;background:{h_color};
-                border-radius:999px;transition:width 0.4s;'></div>
+                border-radius:999px;'></div>
   </div>
   <div style='margin-top:10px;display:grid;grid-template-columns:1fr 1fr;gap:6px;
               font-size:10.5px;font-family:"JetBrains Mono",monospace;'>
     <div style='color:var(--text3);'>Rows kept</div>
     <div style='color:var(--text1);text-align:right;'>{clean_rows}/{raw_rows}</div>
-    <div style='color:var(--text3);'>Warnings</div>
-    <div style='color:{"#f59e0b" if warnings_log else "var(--text1)"};text-align:right;'>{warnings_log}</div>
-    <div style='color:var(--text3);'>Errors</div>
-    <div style='color:{"#ef4444" if errors_log else "var(--text1)"};text-align:right;'>{errors_log}</div>
   </div>
 </div>
 """, unsafe_allow_html=True)
@@ -1010,16 +999,90 @@ elif active_step == 4:
             req  = ((target - last) / last) * 100
 
             if target <= fv:
-                label, kind = "✅ Easily Achievable", 'success'
-                note = f"Forecast <b>${fv:,.0f}</b> exceeds target by <b>{((fv-target)/target*100):.1f}%</b>."
+                label      = "✅ YES — Easily Achievable"
+                kind       = 'success'
+                verdict_color = '#10b981'
+                verdict_bg    = 'rgba(16,185,129,0.08)'
+                verdict_border= 'rgba(16,185,129,0.3)'
+                note = (f"The forecast of <b>${fv:,.0f}</b> already exceeds your target "
+                        f"by <b>{((fv-target)/target*100):.1f}%</b>. "
+                        f"High confidence — no extra effort needed.")
+                recommendation = "Maintain current pricing and volume strategy."
             elif target <= uv:
-                label, kind = "⚠️ Achievable — Stretch", 'warning'
-                note = f"Within 90% CI upper bound (<b>${uv:,.0f}</b>). Needs strong execution."
+                label      = "⚠️ MAYBE — Achievable with Effort"
+                kind       = 'warning'
+                verdict_color = '#f59e0b'
+                verdict_bg    = 'rgba(245,158,11,0.08)'
+                verdict_border= 'rgba(245,158,11,0.3)'
+                note = (f"Your target falls within the 90% confidence upper bound "
+                        f"(<b>${uv:,.0f}</b>). Achievable but requires strong execution "
+                        f"and favourable market conditions.")
+                recommendation = "Increase marketing spend or improve conversion rates."
             else:
-                label, kind = "❌ Beyond Forecast Range", 'danger'
-                note = f"Exceeds upper bound by <b>${target-uv:,.0f}</b>. Major intervention required."
+                label      = "❌ NO — Beyond Forecast Range"
+                kind       = 'danger'
+                verdict_color = '#ef4444'
+                verdict_bg    = 'rgba(239,68,68,0.08)'
+                verdict_border= 'rgba(239,68,68,0.3)'
+                note = (f"Your target exceeds even the optimistic upper bound by "
+                        f"<b>${target-uv:,.0f}</b>. This would require major "
+                        f"intervention beyond normal operations.")
+                recommendation = "Reconsider the target or plan significant pricing/volume changes."
 
-            _insight(f"<b>{label}</b><br>{note}", kind)
+            # Save to session state for report
+            st.session_state.target_result = {
+                "target":         target,
+                "period":         period,
+                "forecast":       fv,
+                "lower":          lv,
+                "upper":          uv,
+                "label":          label,
+                "note":           note,
+                "req_growth":     req,
+                "recommendation": recommendation,
+            }
+
+            # ── Big verdict card ──────────────────────────────────────────
+            st.markdown(f"""
+<div style='background:{verdict_bg};border:2px solid {verdict_border};
+            border-radius:14px;padding:20px 24px;margin-bottom:14px;'>
+  <div style='font-size:20px;font-weight:700;color:{verdict_color};
+              letter-spacing:-0.01em;margin-bottom:10px;'>
+    {label}
+  </div>
+  <div style='font-size:13.5px;color:#9ca3af;line-height:1.7;margin-bottom:12px;'>
+    {note}
+  </div>
+  <div style='height:0.5px;background:{verdict_border};margin-bottom:12px;'></div>
+  <div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;'>
+    <div style='background:rgba(0,0,0,0.2);border-radius:8px;padding:10px 12px;'>
+      <div style='font-size:10px;color:#4b5563;font-family:"JetBrains Mono",monospace;
+                  text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px;'>
+        Your Target
+      </div>
+      <div style='font-size:16px;font-weight:700;color:#f9fafb;'>${target:,.0f}</div>
+    </div>
+    <div style='background:rgba(0,0,0,0.2);border-radius:8px;padding:10px 12px;'>
+      <div style='font-size:10px;color:#4b5563;font-family:"JetBrains Mono",monospace;
+                  text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px;'>
+        ML Forecast
+      </div>
+      <div style='font-size:16px;font-weight:700;color:{verdict_color};'>${fv:,.0f}</div>
+    </div>
+    <div style='background:rgba(0,0,0,0.2);border-radius:8px;padding:10px 12px;'>
+      <div style='font-size:10px;color:#4b5563;font-family:"JetBrains Mono",monospace;
+                  text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px;'>
+        Growth Needed
+      </div>
+      <div style='font-size:16px;font-weight:700;color:#f9fafb;'>{req:+.1f}%</div>
+    </div>
+  </div>
+  <div style='margin-top:12px;padding:10px 14px;background:rgba(0,0,0,0.2);
+              border-radius:8px;font-size:12.5px;color:#6b7280;'>
+    💡 <b style='color:#9ca3af;'>Recommendation:</b> {recommendation}
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
             fig_g = go.Figure(go.Indicator(
                 mode="gauge+number+delta",
@@ -1046,9 +1109,6 @@ elif active_step == 4:
                                 height=260, margin=dict(l=20,r=20,t=40,b=10))
             st.plotly_chart(fig_g, use_container_width=True)
 
-        st.markdown(f"<span class='tag'>Required growth from last period</span>&nbsp;"
-                    f"<span style='font-size:18px;font-weight:700;color:#f9fafb;'>"
-                    f"{req:+.1f}%</span>", unsafe_allow_html=True)
         st.markdown("<div style='height:1px;background:#1f2937;margin:20px 0;'></div>",
                     unsafe_allow_html=True)
 
@@ -1228,12 +1288,13 @@ elif active_step == 7:
 <div style='background:#111827;border:1px solid #1f2937;border-radius:14px;padding:24px;'>
   <div style='font-size:15px;font-weight:700;color:#f9fafb;margin-bottom:6px;'>📄 PDF Report</div>
   <div style='font-size:12.5px;color:#6b7280;margin-bottom:20px;'>
-    Summary stats · Model comparison · Forecast table · Feature importance
+    Summary stats · Model comparison · Forecast · Target check · Feature importance
   </div>
 """, unsafe_allow_html=True)
             pdf = generate_report_pdf(
                 st.session_state.cleaned_df, st.session_state.models,
-                st.session_state.forecast_df, st.session_state.feature_importance
+                st.session_state.forecast_df, st.session_state.feature_importance,
+                st.session_state.target_result
             )
             st.download_button("⬇️ Download PDF Report", pdf,
                                "reviq_report.pdf", "application/pdf")
@@ -1254,6 +1315,64 @@ elif active_step == 7:
             st.download_button("⬇️ Download CSV Export", csv,
                                "reviq_data.csv", "text/csv")
             st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown("<div style='height:1px;background:#1f2937;margin:24px 0;'></div>",
+                    unsafe_allow_html=True)
+
+        # ── Target check result in report ─────────────────────────────────
+        if st.session_state.target_result:
+            tr = st.session_state.target_result
+            is_yes   = "YES" in tr["label"]
+            is_maybe = "MAYBE" in tr["label"]
+            v_color  = '#10b981' if is_yes else ('#f59e0b' if is_maybe else '#ef4444')
+            v_bg     = ('rgba(16,185,129,0.06)' if is_yes else
+                        'rgba(245,158,11,0.06)'  if is_maybe else
+                        'rgba(239,68,68,0.06)')
+            v_border = ('rgba(16,185,129,0.25)' if is_yes else
+                        'rgba(245,158,11,0.25)'  if is_maybe else
+                        'rgba(239,68,68,0.25)')
+
+            st.markdown("#### 🎯 Target Feasibility Result")
+            st.markdown(f"""
+<div style='background:{v_bg};border:1px solid {v_border};
+            border-left:4px solid {v_color};
+            border-radius:12px;padding:18px 22px;margin-bottom:8px;'>
+  <div style='font-size:17px;font-weight:700;color:{v_color};margin-bottom:10px;'>
+    {tr["label"]}
+  </div>
+  <div style='display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px;'>
+    <div style='background:rgba(0,0,0,0.15);border-radius:8px;padding:10px;'>
+      <div style='font-size:10px;color:#4b5563;font-family:"JetBrains Mono",monospace;
+                  text-transform:uppercase;letter-spacing:0.08em;margin-bottom:3px;'>Target</div>
+      <div style='font-size:15px;font-weight:700;color:#f9fafb;'>${tr["target"]:,.0f}</div>
+    </div>
+    <div style='background:rgba(0,0,0,0.15);border-radius:8px;padding:10px;'>
+      <div style='font-size:10px;color:#4b5563;font-family:"JetBrains Mono",monospace;
+                  text-transform:uppercase;letter-spacing:0.08em;margin-bottom:3px;'>ML Forecast</div>
+      <div style='font-size:15px;font-weight:700;color:{v_color};'>${tr["forecast"]:,.0f}</div>
+    </div>
+    <div style='background:rgba(0,0,0,0.15);border-radius:8px;padding:10px;'>
+      <div style='font-size:10px;color:#4b5563;font-family:"JetBrains Mono",monospace;
+                  text-transform:uppercase;letter-spacing:0.08em;margin-bottom:3px;'>Growth Needed</div>
+      <div style='font-size:15px;font-weight:700;color:#f9fafb;'>{tr["req_growth"]:+.1f}%</div>
+    </div>
+  </div>
+  <div style='font-size:12.5px;color:#6b7280;line-height:1.6;margin-bottom:8px;'>
+    {tr["note"].replace("<b>","").replace("</b>","")}
+  </div>
+  <div style='font-size:12px;color:#4b5563;'>
+    💡 <b style='color:#6b7280;'>Recommendation:</b> {tr["recommendation"]}
+  </div>
+</div>
+""", unsafe_allow_html=True)
+        else:
+            st.markdown("""
+<div style='padding:14px 16px;background:#111827;border:1px solid #1f2937;
+            border-radius:10px;font-size:13px;color:#4b5563;'>
+  🎯 No target check run yet — go to Step 5 to check target feasibility.
+  The result will appear here automatically.
+</div>
+""", unsafe_allow_html=True)
 
         st.markdown("<div style='height:1px;background:#1f2937;margin:24px 0;'></div>",
                     unsafe_allow_html=True)
