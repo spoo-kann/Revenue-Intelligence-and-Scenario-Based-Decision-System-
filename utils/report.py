@@ -209,7 +209,7 @@ def generate_report_pdf(
                 pdf.cell(w, 7, val, border=1, ln=False, align="C")
             pdf.ln()
 
-    return bytes(pdf.output(dest='S'))
+    return bytes(pdf.output())
     pdf = FPDF(orientation='P', unit='mm', format='A4')
     # Explicit margins: left=20, top=20, right=20  →  usable width = 210-40 = 170mm
     pdf.set_margins(left=20, top=20, right=20)
@@ -324,4 +324,4 @@ def generate_report_pdf(
                 pdf.cell(cw[i], 7, c, border=1, ln=False, align="C")
             pdf.ln()
 
-    return bytes(pdf.output(dest='S'))
+    return bytes(pdf.output())
